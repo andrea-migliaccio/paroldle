@@ -163,6 +163,33 @@ body {
 }
 .btn-google:hover { background: #eeeeee; }
 
+.login-anon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin-top: 16px;
+}
+
+.btn-anon {
+  background: none;
+  border: none;
+  color: var(--color-absent);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 4px 8px;
+  transition: color 0.15s;
+}
+.btn-anon:hover { color: #ffffff; }
+
+.anon-note {
+  font-size: 0.72rem;
+  color: #666;
+  margin: 0;
+  text-align: center;
+}
+
 /* ─── Header ─────────────────────────────────────────────────────────────── */
 header {
   width: 100%;

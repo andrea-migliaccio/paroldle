@@ -8,6 +8,8 @@ const I18n = (() => {
       // Login
       'login.desc':          'Indovina la parola in 6 tentativi.\nAccedi per salvare le tue statistiche.',
       'login.btn':           'Accedi con Google',
+      'login.anon_link':     'Entra in modalità anonima',
+      'login.anon_note':     'I dati saranno salvati solo su questo dispositivo',
 
       // Header tooltips
       'header.history':      'Storico partite',
@@ -51,6 +53,8 @@ const I18n = (() => {
       // Login
       'login.desc':          'Guess the word in 6 tries.\nSign in to save your statistics.',
       'login.btn':           'Sign in with Google',
+      'login.anon_link':     'Play anonymously',
+      'login.anon_note':     'Data will only be saved on this device',
 
       // Header tooltips
       'header.history':      'Game history',

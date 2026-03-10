@@ -68,18 +68,22 @@ const Game = (() => {
   }
 
   // ── Public: fetch word for a date ─────────────────────────────────────────
-  // Resolution order: localStorage cache → Firestore → proxy chain
+  // Resolution order:
+  //   Authenticated: localStorage cache → Firestore → proxy chain
+  //   Anonymous:     localStorage cache → proxy chain (Firestore skipped)
 
   function fetchTodayWord(date) {
     const cached = readCache(date);
     if (cached) return Promise.resolve(cached);
 
-    return fetchFromFirestore(date)
-      .catch(() => fetchFromProxy(date))
-      .then(data => {
-        writeCache(date, data);
-        return data;
-      });
+    const remote = (window.gameState && window.gameState.anonMode)
+      ? fetchFromProxy(date)
+      : fetchFromFirestore(date).catch(() => fetchFromProxy(date));
+
+    return remote.then(data => {
+      writeCache(date, data);
+      return data;
+    });
   }
 
   // ── Board ─────────────────────────────────────────────────────────────────
