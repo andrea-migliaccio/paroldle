@@ -1,4 +1,4 @@
-// App module — main controller. Wires Auth, Game, Firestore and UI together.
+// App module — main controller. Wires Auth, Game, Firestore/AnonStorage and UI together.
 // window.gameState is the single source of truth for the current session.
 window.gameState = {
   currentGame: {
@@ -10,12 +10,20 @@ window.gameState = {
     currentGuess: '',
     status:       'playing'  // 'playing' | 'won' | 'lost'
   },
-  user:  { uid: null, displayName: null, email: null },
-  stats: { gamesPlayed: 0, gamesWon: 0, currentStreak: 0, maxStreak: 0, distribution: [0,0,0,0,0,0] },
-  keyboard: {}  // letter → 'correct' | 'present' | 'absent'
+  user:     { uid: null, displayName: null, email: null },
+  stats:    { gamesPlayed: 0, gamesWon: 0, currentStreak: 0, maxStreak: 0, distribution: [0,0,0,0,0,0] },
+  keyboard: {},  // letter → 'correct' | 'present' | 'absent'
+  anonMode: false
 };
 
+const ANON_FLAG_KEY = 'unwordle_anon';
+
 const App = (() => {
+
+  // Returns the active storage adapter (Firestore or AnonStorage)
+  function getStorage() {
+    return window.gameState.anonMode ? AnonStorage : Firestore;
+  }
 
   // ── Toast ──────────────────────────────────────────────────────────────────
 
@@ -188,7 +196,7 @@ const App = (() => {
         finishGame('loss');
       } else {
         // Game still in progress — persist current state so user can resume later
-        Firestore.saveGameProgress(window.gameState.user.uid, gs)
+        getStorage().saveGameProgress(window.gameState.user.uid, gs)
           .catch(err => console.warn('Could not save progress:', err));
       }
     });
@@ -225,8 +233,8 @@ const App = (() => {
       completedAt: firebase.firestore.Timestamp.now()
     };
 
-    Firestore.saveGame(uid, gameRecord)
-      .then(() => Firestore.saveStats(uid, stats))
+    getStorage().saveGame(uid, gameRecord)
+      .then(() => getStorage().saveStats(uid, stats))
       .then(() => {
         setTimeout(() => {
           renderStats();
@@ -277,7 +285,7 @@ const App = (() => {
     Game.buildKeyboard();
     updateDateNav();
 
-    Firestore.loadGame(uid, date)
+    getStorage().loadGame(uid, date)
       .then(existingGame => {
         if (existingGame) {
           const gs = window.gameState.currentGame;
@@ -334,13 +342,30 @@ const App = (() => {
     // Prefetch word list in background so it's ready when the user submits
     Game.loadWordList().catch(err => console.warn('Word list non caricata:', err));
 
-    Firestore.saveUserProfile(user.uid, { displayName: user.displayName, email: user.email });
+    getStorage().saveUserProfile(user.uid, { displayName: user.displayName, email: user.email });
 
-    Firestore.loadStats(user.uid)
+    getStorage().loadStats(user.uid)
       .then(stats => {
         window.gameState.stats = stats;
         loadDate(Utils.todayString());
       });
+  }
+
+  function startAnonGame() {
+    window.gameState.anonMode = true;
+    localStorage.setItem(ANON_FLAG_KEY, '1');
+    window.gameState.user = { uid: 'anon', displayName: 'Anonymous', email: '' };
+
+    Game.buildBoard();
+    Game.buildKeyboard();
+    showGameScreen();
+
+    Game.loadWordList().catch(err => console.warn('Word list non caricata:', err));
+
+    AnonStorage.loadStats('anon').then(stats => {
+      window.gameState.stats = stats;
+      loadDate(Utils.todayString());
+    });
   }
 
   // ── Keyboard input ─────────────────────────────────────────────────────────
@@ -356,6 +381,16 @@ const App = (() => {
 
   // ── Event listeners ────────────────────────────────────────────────────────
 
+  function resetGameState() {
+    window.gameState = {
+      currentGame: { date: null, puzzleId: null, targetWord: null, guesses: [], feedback: [], currentGuess: '', status: 'playing' },
+      user:     { uid: null, displayName: null, email: null },
+      stats:    { gamesPlayed: 0, gamesWon: 0, currentStreak: 0, maxStreak: 0, distribution: [0,0,0,0,0,0] },
+      keyboard: {},
+      anonMode: false
+    };
+  }
+
   function initUI() {
     // Login
     document.getElementById('login-btn').addEventListener('click', () => {
@@ -365,17 +400,23 @@ const App = (() => {
       });
     });
 
-    // Logout
+    // Anonymous login
+    document.getElementById('anon-btn').addEventListener('click', () => {
+      startAnonGame();
+    });
+
+    // Logout (works for both authenticated and anonymous mode)
     document.getElementById('logout-btn').addEventListener('click', () => {
-      Auth.signOut().then(() => {
-        window.gameState = {
-          currentGame: { date: null, puzzleId: null, targetWord: null, guesses: [], feedback: [], currentGuess: '', status: 'playing' },
-          user: { uid: null, displayName: null, email: null },
-          stats: { gamesPlayed: 0, gamesWon: 0, currentStreak: 0, maxStreak: 0, distribution: [0,0,0,0,0,0] },
-          keyboard: {}
-        };
+      if (window.gameState.anonMode) {
+        localStorage.removeItem(ANON_FLAG_KEY);
+        resetGameState();
         showLoginScreen();
-      });
+      } else {
+        Auth.signOut().then(() => {
+          resetGameState();
+          showLoginScreen();
+        });
+      }
     });
 
     // Stats button
@@ -388,7 +429,7 @@ const App = (() => {
     document.getElementById('history-btn').addEventListener('click', () => {
       const uid = window.gameState.user.uid;
       if (!uid) return;
-      Firestore.loadHistory(uid, 30).then(games => {
+      getStorage().loadHistory(uid, 30).then(games => {
         renderHistory(games);
         openModal('history-modal');
       });
@@ -442,16 +483,27 @@ const App = (() => {
     initUI();
     initKeyboardListener();
 
+    // Always register the auth listener so Google login works even after
+    // leaving anonymous mode (which skips Firebase auth entirely).
     Auth.onAuthChange(user => {
+      // Ignore Firebase auth events while in anonymous mode.
+      if (localStorage.getItem(ANON_FLAG_KEY)) return;
       if (user) {
         startGame(user);
       } else {
         showLoginScreen();
       }
     });
+
+    // If the user had previously chosen anonymous mode, resume it immediately
+    // without waiting for Firebase Auth (which would redirect to login).
+    if (localStorage.getItem(ANON_FLAG_KEY)) {
+      startAnonGame();
+    }
   }
 
   document.addEventListener('DOMContentLoaded', init);
 
   return { handleKey };
 })();
+
