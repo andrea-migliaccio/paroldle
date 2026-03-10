@@ -38,34 +38,53 @@ const Firestore = (() => {
 
   // ── Games ─────────────────────────────────────────────────────────────────
 
-  // gameData: { date, puzzleId, targetWord, guesses, feedback, result, attempts, completedAt }
-  function saveGame(uid, gameData) {
-    return db.collection('users').doc(uid)
-      .collection('games').doc(gameData.date)
-      .set(gameData);
+  // Firestore does not support nested arrays.
+  // feedback is stored as an array of comma-joined strings: ["absent,correct,present,absent,correct", ...]
+  function serializeFeedback(feedback) {
+    return feedback.map(row => row.join(','));
   }
 
-  // Load today's game if already played
-  function loadTodayGame(uid, date) {
+  function deserializeFeedback(feedback) {
+    return feedback.map(row => row.split(','));
+  }
+
+  // gameData: { date, puzzleId, targetWord, guesses, feedback, result, attempts, completedAt }
+  function saveGame(uid, gameData) {
+    const record = Object.assign({}, gameData, {
+      feedback: serializeFeedback(gameData.feedback)
+    });
+    return db.collection('users').doc(uid)
+      .collection('games').doc(gameData.date)
+      .set(record);
+  }
+
+  function deserializeGame(data) {
+    return Object.assign({}, data, {
+      feedback: deserializeFeedback(data.feedback)
+    });
+  }
+
+  // Load a specific game by date
+  function loadGame(uid, date) {
     return db.collection('users').doc(uid)
       .collection('games').doc(date)
       .get()
-      .then(doc => doc.exists ? doc.data() : null);
+      .then(doc => doc.exists ? deserializeGame(doc.data()) : null);
   }
 
   // Load history (most recent games first)
   function loadHistory(uid, limit) {
     return db.collection('users').doc(uid)
       .collection('games')
-      .orderBy('completedAt', 'desc')
-      .limit(limit || 20)
+      .orderBy('date', 'desc')
+      .limit(limit || 50)
       .get()
       .then(snapshot => {
         const games = [];
-        snapshot.forEach(doc => games.push(doc.data()));
+        snapshot.forEach(doc => games.push(deserializeGame(doc.data())));
         return games;
       });
   }
 
-  return { saveUserProfile, loadStats, saveStats, saveGame, loadTodayGame, loadHistory };
+  return { saveUserProfile, loadStats, saveStats, saveGame, loadGame, loadHistory };
 })();

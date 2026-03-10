@@ -243,7 +243,7 @@ const App = (() => {
     Firestore.loadStats(user.uid)
       .then(stats => {
         window.gameState.stats = stats;
-        return Firestore.loadTodayGame(user.uid, date);
+        return Firestore.loadGame(user.uid, date);
       })
       .then(existingGame => {
         if (existingGame) {
