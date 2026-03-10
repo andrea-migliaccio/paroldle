@@ -1,3 +1,60 @@
+/* ─── Date navigation bar ────────────────────────────────────────────────── */
+#date-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: 360px;
+  padding: 4px 0 2px;
+  gap: 8px;
+}
+
+#date-nav-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  gap: 1px;
+}
+
+#date-nav-puzzle {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #818384;
+  text-transform: uppercase;
+}
+
+#date-nav-date {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+#nav-prev, #nav-next {
+  background: none;
+  border: none;
+  color: #ffffff;
+  font-size: 1.4rem;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+
+#nav-prev:hover, #nav-next:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+#nav-next:disabled {
+  color: #3a3a3c;
+  cursor: default;
+}
+#nav-next:disabled:hover {
+  background: none;
+}
+
 /* ─── Variables ─────────────────────────────────────────────────────────── */
 :root {
   --color-bg:        #121213;

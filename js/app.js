@@ -151,6 +151,12 @@ const App = (() => {
       return;
     }
 
+    if (!Game.isValidWord(gs.currentGuess)) {
+      showToast('Parola non valida!');
+      Game.shakeRow(gs.guesses.length);
+      return;
+    }
+
     const guess    = gs.currentGuess;
     const feedback = Utils.computeFeedback(guess, gs.targetWord);
     const rowIdx   = gs.guesses.length;
@@ -225,37 +231,58 @@ const App = (() => {
       });
   }
 
-  // ── Initialize game ────────────────────────────────────────────────────────
+  // ── Date navigation ────────────────────────────────────────────────────────
 
-  function startGame(user) {
-    window.gameState.user = { uid: user.uid, displayName: user.displayName, email: user.email };
-    const date = Utils.todayString();
-    window.gameState.currentGame.date = date;
+  function dateAddDays(dateStr, days) {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setDate(d.getDate() + days);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  function formatDateLabel(dateStr) {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const date = new Date(y, m - 1, d);
+    return date.toLocaleDateString('it-IT', { day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function updateDateNav() {
+    const gs    = window.gameState.currentGame;
+    const today = Utils.todayString();
+
+    document.getElementById('date-nav-puzzle').textContent =
+      gs.puzzleId ? `Wordle #${gs.puzzleId}` : '';
+    document.getElementById('date-nav-date').textContent = formatDateLabel(gs.date);
+
+    document.getElementById('nav-next').disabled = (gs.date >= today);
+  }
+
+  function loadDate(date) {
+    const uid = window.gameState.user.uid;
+
+    // Reset game state for the new date
+    window.gameState.currentGame = {
+      date, puzzleId: null, targetWord: null,
+      guesses: [], feedback: [], currentGuess: '', status: 'playing'
+    };
     window.gameState.keyboard = {};
 
     Game.buildBoard();
     Game.buildKeyboard();
-    showGameScreen();
+    updateDateNav();
 
-    Firestore.saveUserProfile(user.uid, { displayName: user.displayName, email: user.email });
-
-    // Load stats, then check if today's game is already played
-    Firestore.loadStats(user.uid)
-      .then(stats => {
-        window.gameState.stats = stats;
-        return Firestore.loadGame(user.uid, date);
-      })
+    Firestore.loadGame(uid, date)
       .then(existingGame => {
         if (existingGame) {
-          // Restore completed game
           const gs = window.gameState.currentGame;
-          gs.targetWord   = existingGame.targetWord;
-          gs.puzzleId     = existingGame.puzzleId;
-          gs.guesses      = existingGame.guesses;
-          gs.feedback     = existingGame.feedback;
-          gs.status       = existingGame.result === 'win' ? 'won' : 'lost';
+          gs.targetWord = existingGame.targetWord;
+          gs.puzzleId   = existingGame.puzzleId;
+          gs.guesses    = existingGame.guesses;
+          gs.feedback   = existingGame.feedback;
+          gs.status     = existingGame.result === 'win' ? 'won' : 'lost';
 
-          // Rebuild keyboard state from saved feedback
           existingGame.guesses.forEach((guess, ri) => {
             guess.split('').forEach((letter, ci) => {
               window.gameState.keyboard[letter] = Utils.bestState(
@@ -266,23 +293,44 @@ const App = (() => {
 
           Game.restoreBoard(existingGame.guesses, existingGame.feedback);
           Game.updateKeyboard(window.gameState.keyboard);
+          updateDateNav();
 
+          const today = Utils.todayString();
+          const isToday = date === today;
           const msg = existingGame.result === 'win'
-            ? `Hai già vinto oggi con ${existingGame.attempts}/6!`
-            : `Partita di oggi persa. La parola era: ${existingGame.targetWord}`;
-          setTimeout(() => showToast(msg, 4000), 500);
-          return Promise.resolve();
+            ? `${isToday ? 'Hai già vinto oggi' : 'Hai vinto'} con ${existingGame.attempts}/6!`
+            : `Partita persa. La parola era: ${existingGame.targetWord}`;
+          setTimeout(() => showToast(msg, 4000), 300);
+        } else {
+          return Game.fetchTodayWord(date).then(({ word, puzzleId }) => {
+            window.gameState.currentGame.targetWord = word;
+            window.gameState.currentGame.puzzleId   = puzzleId;
+            updateDateNav();
+          });
         }
-
-        // Fetch today's word and start fresh
-        return Game.fetchTodayWord(date).then(({ word, puzzleId }) => {
-          window.gameState.currentGame.targetWord = word;
-          window.gameState.currentGame.puzzleId   = puzzleId;
-        });
       })
       .catch(err => {
-        console.error('Errore avvio gioco:', err);
+        console.error('Errore caricamento partita:', err);
         showToast('Errore nel caricamento della parola. Riprova.', 4000);
+      });
+  }
+
+  function startGame(user) {
+    window.gameState.user = { uid: user.uid, displayName: user.displayName, email: user.email };
+
+    Game.buildBoard();
+    Game.buildKeyboard();
+    showGameScreen();
+
+    // Prefetch word list in background so it's ready when the user submits
+    Game.loadWordList().catch(err => console.warn('Word list non caricata:', err));
+
+    Firestore.saveUserProfile(user.uid, { displayName: user.displayName, email: user.email });
+
+    Firestore.loadStats(user.uid)
+      .then(stats => {
+        window.gameState.stats = stats;
+        loadDate(Utils.todayString());
       });
   }
 
@@ -333,6 +381,19 @@ const App = (() => {
         renderHistory(games);
         openModal('history-modal');
       });
+    });
+
+    // Date navigation arrows
+    document.getElementById('nav-prev').addEventListener('click', () => {
+      const prevDate = dateAddDays(window.gameState.currentGame.date, -1);
+      loadDate(prevDate);
+    });
+
+    document.getElementById('nav-next').addEventListener('click', () => {
+      const gs    = window.gameState.currentGame;
+      const today = Utils.todayString();
+      if (gs.date >= today) return;
+      loadDate(dateAddDays(gs.date, 1));
     });
 
     // Share button

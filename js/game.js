@@ -159,8 +159,34 @@ const Game = (() => {
     });
   }
 
+  // ── Word list validation ──────────────────────────────────────────────────
+
+  const WORD_LIST_URL = 'https://raw.githubusercontent.com/tabatkins/wordle-list/main/words';
+  let validWords = null; // Set<string>, loaded once
+
+  function loadWordList() {
+    if (validWords !== null) return Promise.resolve(validWords);
+    return fetch(WORD_LIST_URL)
+      .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      })
+      .then(text => {
+        validWords = new Set(text.trim().split('\n').map(w => w.trim().toUpperCase()));
+        return validWords;
+      });
+  }
+
+  function isValidWord(word) {
+    // If list not loaded yet, accept the word (fail-open)
+    if (validWords === null) return true;
+    return validWords.has(word.toUpperCase());
+  }
+
   return {
     fetchTodayWord,
+    loadWordList,
+    isValidWord,
     buildBoard,
     buildKeyboard,
     updateKeyboard,
