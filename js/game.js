@@ -1,12 +1,18 @@
-// Game module — board rendering, input handling, NYTimes word fetch
+// Game module — board rendering, input handling, word fetching
 const Game = (() => {
   const WORD_LENGTH  = 5;
   const MAX_ATTEMPTS = 6;
 
-  // Public NYTimes Wordle endpoint. corsproxy.io is used to bypass CORS restrictions
-  // when running on a different domain (e.g. GitHub Pages).
   const NYTIMES_BASE = 'https://www.nytimes.com/svc/wordle/v2/';
-  const CORS_PROXY   = 'https://corsproxy.io/?';
+
+  // CORS proxy fallback chain — tried in order until one succeeds.
+  // Primary source is Firestore (populated by Cloud Function), these are last-resort.
+  const CORS_PROXIES = [
+    url => 'https://corsproxy.io/?' + encodeURIComponent(url),
+    url => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url),
+    // Optional custom proxy: define window.CUSTOM_CORS_PROXY in firebase-config.js
+    // e.g. window.CUSTOM_CORS_PROXY = 'https://my-worker.workers.dev/?';
+  ];
 
   const KEYBOARD_ROWS = [
     ['Q','W','E','R','T','Y','U','I','O','P'],
@@ -14,19 +20,66 @@ const Game = (() => {
     ['ENTER','Z','X','C','V','B','N','M','⌫']
   ];
 
-  // ── Fetch today's word ────────────────────────────────────────────────────
+  // ── localStorage cache ────────────────────────────────────────────────────
+
+  function cacheKey(date) { return 'wordle_word_' + date; }
+
+  function readCache(date) {
+    try {
+      const raw = localStorage.getItem(cacheKey(date));
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+
+  function writeCache(date, data) {
+    try { localStorage.setItem(cacheKey(date), JSON.stringify(data)); } catch (_) {}
+  }
+
+  // ── Firestore read (primary source — populated by Cloud Function) ──────────
+
+  function fetchFromFirestore(date) {
+    return firebase.firestore()
+      .collection('words').doc(date)
+      .get()
+      .then(doc => {
+        if (!doc.exists) throw new Error('not in Firestore');
+        const d = doc.data();
+        return { word: d.word, puzzleId: d.puzzleId };
+      });
+  }
+
+  // ── NYTimes via proxy chain (fallback) ────────────────────────────────────
+
+  function fetchFromProxy(date) {
+    const nytUrl  = NYTIMES_BASE + date + '.json';
+    const proxies = typeof window.CUSTOM_CORS_PROXY === 'string'
+      ? [url => window.CUSTOM_CORS_PROXY + encodeURIComponent(url), ...CORS_PROXIES]
+      : CORS_PROXIES;
+
+    // Try each proxy in sequence, stopping at first success
+    return proxies.reduce(
+      (chain, makeUrl) => chain.catch(() =>
+        fetch(makeUrl(nytUrl))
+          .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+          .then(data => ({ word: data.solution.toUpperCase(), puzzleId: data.days_since_launch || data.id || 0 }))
+      ),
+      Promise.reject(new Error('start'))
+    );
+  }
+
+  // ── Public: fetch word for a date ─────────────────────────────────────────
+  // Resolution order: localStorage cache → Firestore → proxy chain
 
   function fetchTodayWord(date) {
-    const url = CORS_PROXY + encodeURIComponent(NYTIMES_BASE + date + '.json');
-    return fetch(url)
-      .then(r => {
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.json();
-      })
-      .then(data => ({
-        word:     data.solution.toUpperCase(),
-        puzzleId: data.days_since_launch || data.id || 0
-      }));
+    const cached = readCache(date);
+    if (cached) return Promise.resolve(cached);
+
+    return fetchFromFirestore(date)
+      .catch(() => fetchFromProxy(date))
+      .then(data => {
+        writeCache(date, data);
+        return data;
+      });
   }
 
   // ── Board ─────────────────────────────────────────────────────────────────

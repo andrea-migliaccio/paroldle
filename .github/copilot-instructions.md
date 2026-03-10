@@ -105,24 +105,117 @@ Remember: `localhost` must be in Firebase Auth → Authorized Domains.
 
 Push to `main` → GitHub Actions (`deploy.yml`) builds and deploys to GitHub Pages automatically. No build step — files served as-is. GitHub Pages source must be set to **GitHub Actions** in repository Settings → Pages.
 
-### Firestore Security Rules
+### Firestore Security Rules (complete — keep this updated)
+
+Copy-paste into **Firebase Console → Firestore Database → Rules** then click **Publish**.
 
 ```
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ── Daily words (written by Cloud Function only) ──────────────────────
+    match /words/{date} {
+      allow read:  if request.auth != null;
+      allow write: if false;  // Admin SDK (Cloud Function) bypasses rules
+    }
+
+    // ── Per-user data ─────────────────────────────────────────────────────
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-      match /games/{gameId} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+      function isOwner() {
+        return request.auth != null && request.auth.uid == uid;
       }
-      match /stats/{document} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+      function isString(v)    { return v is string; }
+      function isInt(v)       { return v is int; }
+      function isTimestamp(v) { return v is timestamp; }
+
+      function validProfile() {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['displayName', 'email', 'updatedAt'])
+          && isString(d.displayName) && isString(d.email) && isTimestamp(d.updatedAt);
+      }
+
+      allow read:  if isOwner();
+      allow write: if isOwner() && validProfile();
+
+      match /games/{gameDate} {
+        function validGame() {
+          let d = request.resource.data;
+          return d.keys().hasOnly(['date','puzzleId','targetWord','guesses','feedback',
+                                   'result','attempts','completedAt'])
+            && isString(d.date) && d.date.size() == 10 && d.date == gameDate
+            && isInt(d.puzzleId) && d.puzzleId >= 0
+            && isString(d.targetWord) && d.targetWord.size() == 5
+            && d.guesses is list && d.guesses.size() >= 1 && d.guesses.size() <= 6
+            && d.feedback is list && d.feedback.size() == d.guesses.size()
+            && isString(d.result) && (d.result == 'win' || d.result == 'loss')
+            && isInt(d.attempts) && d.attempts >= 1 && d.attempts <= 6
+            && d.attempts == d.guesses.size()
+            && isTimestamp(d.completedAt);
+        }
+        allow read:           if isOwner();
+        allow create, update: if isOwner() && validGame();
+        allow delete:         if false;
+      }
+
+      match /stats/{doc} {
+        function validStats() {
+          let d = request.resource.data;
+          return doc == 'summary'
+            && d.keys().hasOnly(['gamesPlayed','gamesWon','currentStreak','maxStreak','distribution'])
+            && isInt(d.gamesPlayed) && d.gamesPlayed >= 0
+            && isInt(d.gamesWon) && d.gamesWon >= 0 && d.gamesWon <= d.gamesPlayed
+            && isInt(d.currentStreak) && d.currentStreak >= 0
+            && isInt(d.maxStreak) && d.maxStreak >= 0 && d.currentStreak <= d.maxStreak
+            && d.distribution is list && d.distribution.size() == 6;
+        }
+        allow read:  if isOwner();
+        allow write: if isOwner() && validStats();
       }
     }
   }
 }
 ```
+
+### Cloud Functions Setup (step-by-step)
+
+1. **Upgrade Firebase to Blaze plan** — Firebase Console → left sidebar → upgrade link → add credit card (stays free within generous limits; set a budget alert at $1 for safety)
+
+2. **Generate Service Account key** — Firebase Console → Project Settings → Service Accounts tab → *Generate new private key* → download JSON file (keep it secret, never commit it)
+
+3. **Add GitHub Secret** — GitHub repo → Settings → Secrets and variables → Actions → *New repository secret*:
+   - Name: `FIREBASE_SERVICE_ACCOUNT`
+   - Value: paste the entire content of the downloaded JSON
+
+4. **Install Firebase CLI locally** (one-time):
+   ```bash
+   npm install -g firebase-tools
+   firebase login
+   ```
+
+5. **Initialize Functions in the repo**:
+   ```bash
+   cd wordle
+   firebase use YOUR_PROJECT_ID
+   firebase init functions
+   # → Select: Use an existing project → JavaScript → No ESLint → No overwrite index.js
+   ```
+
+6. **First manual deploy**:
+   ```bash
+   cd functions && npm install
+   firebase deploy --only functions
+   ```
+
+7. **Subsequent deploys** — automatic via GitHub Actions whenever `functions/**` changes on push to `main`.
+
+### Word Resolution (client-side priority order)
+
+1. `localStorage` cache (`wordle_word_{date}`) — fastest, zero network
+2. Firestore `words/{date}` — populated daily by Cloud Function at 00:05 UTC
+3. `window.CUSTOM_CORS_PROXY` (if set in `firebase-config.js`) — first proxy if defined
+4. `corsproxy.io` — fallback proxy
+5. `allorigins.win` — final fallback proxy
 
 ### Common Tasks
 
@@ -134,6 +227,8 @@ service cloud.firestore {
 | Change Firestore schema | `js/firestore.js` — remember to handle nested array serialization |
 | Add a new stat | `js/app.js` `finishGame()` + `js/firestore.js` `saveStats()` |
 | Change date navigation logic | `js/app.js` `loadDate()`, `dateAddDays()`, `updateDateNav()` |
+| Deploy Cloud Function manually | `cd functions && npm install && firebase deploy --only functions` |
+| Update Security Rules | Firebase Console → Firestore → Rules (see section above) |
 
 ---
 

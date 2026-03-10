@@ -9,6 +9,18 @@
 //   3. Enable Firestore Database (start in production mode)
 //   4. Add your domain (e.g. username.github.io) to Authentication → Settings → Authorized domains
 //   5. Paste the config values below
+//
+// Cloud Functions setup (for daily word scheduler):
+//   1. Upgrade Firebase project to Blaze (pay-as-you-go) plan
+//   2. Firebase Console → Project Settings → Service Accounts → Generate new private key
+//      Save the downloaded JSON — you will need it for GitHub Actions
+//   3. GitHub repo → Settings → Secrets and variables → Actions → New repository secret
+//      Name: FIREBASE_SERVICE_ACCOUNT   Value: paste the entire JSON content
+//   4. Locally: npm install -g firebase-tools
+//   5. firebase login
+//   6. firebase init functions   (select existing project, JavaScript, no ESLint)
+//   7. First manual deploy: firebase deploy --only functions
+//   8. Subsequent deploys: automatic via GitHub Actions on push to main (when functions/ changes)
 
 const firebaseConfig = {
   apiKey: "AIzaSyB9csGnaWqjYccsmXTCBXNVbNGA60cgHR8",
@@ -21,3 +33,9 @@ const firebaseConfig = {
 };
 
 firebase.initializeApp(firebaseConfig);
+
+// Optional: custom CORS proxy (e.g. Cloudflare Worker) as first-priority fallback.
+// Set this if corsproxy.io and allorigins.win are blocked on your network.
+// Example: window.CUSTOM_CORS_PROXY = 'https://my-worker.my-domain.workers.dev/?';
+// window.CUSTOM_CORS_PROXY = undefined;
+
