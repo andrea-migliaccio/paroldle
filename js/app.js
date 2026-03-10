@@ -1,0 +1,378 @@
+// App module — main controller. Wires Auth, Game, Firestore and UI together.
+// window.gameState is the single source of truth for the current session.
+window.gameState = {
+  currentGame: {
+    date:         null,
+    puzzleId:     null,
+    targetWord:   null,
+    guesses:      [],    // ['AUDIO', 'CRANE', ...]
+    feedback:     [],    // [['absent','correct',...], ...]
+    currentGuess: '',
+    status:       'playing'  // 'playing' | 'won' | 'lost'
+  },
+  user:  { uid: null, displayName: null, email: null },
+  stats: { gamesPlayed: 0, gamesWon: 0, currentStreak: 0, maxStreak: 0, distribution: [0,0,0,0,0,0] },
+  keyboard: {}  // letter → 'correct' | 'present' | 'absent'
+};
+
+const App = (() => {
+
+  // ── Toast ──────────────────────────────────────────────────────────────────
+
+  let toastTimer;
+  function showToast(msg, duration) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('visible');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('visible'), duration || 2000);
+  }
+
+  // ── Modal ──────────────────────────────────────────────────────────────────
+
+  function openModal(id) {
+    document.getElementById(id).classList.remove('hidden');
+  }
+
+  function closeModal(id) {
+    document.getElementById(id).classList.add('hidden');
+  }
+
+  // ── Screen toggle ──────────────────────────────────────────────────────────
+
+  function showLoginScreen() {
+    document.getElementById('login-screen').classList.remove('hidden');
+    document.getElementById('game-screen').classList.add('hidden');
+  }
+
+  function showGameScreen() {
+    document.getElementById('login-screen').classList.add('hidden');
+    document.getElementById('game-screen').classList.remove('hidden');
+  }
+
+  // ── Stats UI ───────────────────────────────────────────────────────────────
+
+  function renderStats() {
+    const s = window.gameState.stats;
+    const pct = s.gamesPlayed > 0 ? Math.round(s.gamesWon / s.gamesPlayed * 100) : 0;
+    document.getElementById('stat-played').textContent    = s.gamesPlayed;
+    document.getElementById('stat-winpct').textContent    = pct;
+    document.getElementById('stat-streak').textContent    = s.currentStreak;
+    document.getElementById('stat-maxstreak').textContent = s.maxStreak;
+
+    const maxVal = Math.max(...s.distribution, 1);
+    const dist = document.getElementById('distribution');
+    dist.innerHTML = '';
+    s.distribution.forEach((count, i) => {
+      const bar = document.createElement('div');
+      bar.classList.add('dist-row');
+      const isCurrentGuess = window.gameState.currentGame.status !== 'playing' &&
+        window.gameState.currentGame.guesses.length === i + 1 &&
+        window.gameState.currentGame.status === 'won';
+      bar.innerHTML = `
+        <span class="dist-label">${i + 1}</span>
+        <div class="dist-bar ${isCurrentGuess ? 'dist-bar-current' : ''}"
+             style="width:${Math.max(8, Math.round(count / maxVal * 100))}%">
+          <span>${count}</span>
+        </div>`;
+      dist.appendChild(bar);
+    });
+
+    const shareBtn = document.getElementById('share-btn');
+    if (window.gameState.currentGame.status !== 'playing') {
+      shareBtn.classList.remove('hidden');
+    } else {
+      shareBtn.classList.add('hidden');
+    }
+  }
+
+  // ── History UI ─────────────────────────────────────────────────────────────
+
+  function renderHistory(games) {
+    const list = document.getElementById('history-list');
+    if (!games.length) {
+      list.innerHTML = '<p class="history-empty">Nessuna partita ancora.</p>';
+      return;
+    }
+    list.innerHTML = '';
+    games.forEach(game => {
+      const item = document.createElement('div');
+      item.classList.add('history-item');
+      const resultClass = game.result === 'win' ? 'history-win' : 'history-loss';
+      const resultLabel = game.result === 'win' ? `${game.attempts}/6` : 'X/6';
+      const grid = game.feedback.map(row =>
+        row.map(s => ({ correct:'🟩', present:'🟨', absent:'⬛' }[s])).join('')
+      ).join('\n');
+      item.innerHTML = `
+        <div class="history-header">
+          <span class="history-date">${game.date}</span>
+          <span class="history-word">${game.targetWord}</span>
+          <span class="history-result ${resultClass}">${resultLabel}</span>
+        </div>
+        <pre class="history-grid">${grid}</pre>`;
+      list.appendChild(item);
+    });
+  }
+
+  // ── Key handling ───────────────────────────────────────────────────────────
+
+  function handleKey(key) {
+    const gs = window.gameState.currentGame;
+    if (gs.status !== 'playing') return;
+
+    if (key === '⌫' || key === 'Backspace') {
+      if (gs.currentGuess.length > 0) {
+        gs.currentGuess = gs.currentGuess.slice(0, -1);
+        const col = gs.currentGuess.length;
+        Game.setTileLetter(gs.guesses.length, col, '');
+      }
+      return;
+    }
+
+    if (key === 'ENTER' || key === 'Enter') {
+      submitGuess();
+      return;
+    }
+
+    if (/^[A-Za-z]$/.test(key)) {
+      if (gs.currentGuess.length < 5) {
+        const col = gs.currentGuess.length;
+        gs.currentGuess += key.toUpperCase();
+        Game.setTileLetter(gs.guesses.length, col, key.toUpperCase());
+      }
+    }
+  }
+
+  function submitGuess() {
+    const gs = window.gameState.currentGame;
+    if (gs.currentGuess.length < 5) {
+      showToast('Parola troppo corta!');
+      Game.shakeRow(gs.guesses.length);
+      return;
+    }
+
+    const guess    = gs.currentGuess;
+    const feedback = Utils.computeFeedback(guess, gs.targetWord);
+    const rowIdx   = gs.guesses.length;
+
+    // Update keyboard state
+    guess.split('').forEach((letter, i) => {
+      window.gameState.keyboard[letter] = Utils.bestState(
+        window.gameState.keyboard[letter], feedback[i]
+      );
+    });
+
+    Game.revealRow(rowIdx, guess.split(''), feedback).then(() => {
+      Game.updateKeyboard(window.gameState.keyboard);
+      gs.guesses.push(guess);
+      gs.feedback.push(feedback);
+      gs.currentGuess = '';
+
+      const won = feedback.every(s => s === 'correct');
+      if (won) {
+        gs.status = 'won';
+        setTimeout(() => {
+          Game.bounceRow(rowIdx);
+          showToast(WIN_MESSAGES[Math.min(gs.guesses.length - 1, WIN_MESSAGES.length - 1)], 3000);
+        }, 400);
+        finishGame('win');
+      } else if (gs.guesses.length >= 6) {
+        gs.status = 'lost';
+        setTimeout(() => showToast(gs.targetWord, 4000), 400);
+        finishGame('loss');
+      }
+    });
+  }
+
+  const WIN_MESSAGES = ['Genio!', 'Magnifico!', 'Impressionante!', 'Splendido!', 'Bravo!', 'Uff, per un pelo!'];
+
+  // ── Game finish ────────────────────────────────────────────────────────────
+
+  function finishGame(result) {
+    const gs    = window.gameState.currentGame;
+    const stats = window.gameState.stats;
+    const uid   = window.gameState.user.uid;
+
+    // Update stats
+    stats.gamesPlayed++;
+    if (result === 'win') {
+      stats.gamesWon++;
+      stats.currentStreak++;
+      if (stats.currentStreak > stats.maxStreak) stats.maxStreak = stats.currentStreak;
+      stats.distribution[gs.guesses.length - 1]++;
+    } else {
+      stats.currentStreak = 0;
+    }
+
+    const gameRecord = {
+      date:        gs.date,
+      puzzleId:    gs.puzzleId,
+      targetWord:  gs.targetWord,
+      guesses:     gs.guesses,
+      feedback:    gs.feedback,
+      result:      result,
+      attempts:    gs.guesses.length,
+      completedAt: firebase.firestore.Timestamp.now()
+    };
+
+    Firestore.saveGame(uid, gameRecord)
+      .then(() => Firestore.saveStats(uid, stats))
+      .then(() => {
+        setTimeout(() => {
+          renderStats();
+          openModal('stats-modal');
+        }, 1800);
+      });
+  }
+
+  // ── Initialize game ────────────────────────────────────────────────────────
+
+  function startGame(user) {
+    window.gameState.user = { uid: user.uid, displayName: user.displayName, email: user.email };
+    const date = Utils.todayString();
+    window.gameState.currentGame.date = date;
+    window.gameState.keyboard = {};
+
+    Game.buildBoard();
+    Game.buildKeyboard();
+    showGameScreen();
+
+    Firestore.saveUserProfile(user.uid, { displayName: user.displayName, email: user.email });
+
+    // Load stats, then check if today's game is already played
+    Firestore.loadStats(user.uid)
+      .then(stats => {
+        window.gameState.stats = stats;
+        return Firestore.loadTodayGame(user.uid, date);
+      })
+      .then(existingGame => {
+        if (existingGame) {
+          // Restore completed game
+          const gs = window.gameState.currentGame;
+          gs.targetWord   = existingGame.targetWord;
+          gs.puzzleId     = existingGame.puzzleId;
+          gs.guesses      = existingGame.guesses;
+          gs.feedback     = existingGame.feedback;
+          gs.status       = existingGame.result === 'win' ? 'won' : 'lost';
+
+          // Rebuild keyboard state from saved feedback
+          existingGame.guesses.forEach((guess, ri) => {
+            guess.split('').forEach((letter, ci) => {
+              window.gameState.keyboard[letter] = Utils.bestState(
+                window.gameState.keyboard[letter], existingGame.feedback[ri][ci]
+              );
+            });
+          });
+
+          Game.restoreBoard(existingGame.guesses, existingGame.feedback);
+          Game.updateKeyboard(window.gameState.keyboard);
+
+          const msg = existingGame.result === 'win'
+            ? `Hai già vinto oggi con ${existingGame.attempts}/6!`
+            : `Partita di oggi persa. La parola era: ${existingGame.targetWord}`;
+          setTimeout(() => showToast(msg, 4000), 500);
+          return Promise.resolve();
+        }
+
+        // Fetch today's word and start fresh
+        return Game.fetchTodayWord(date).then(({ word, puzzleId }) => {
+          window.gameState.currentGame.targetWord = word;
+          window.gameState.currentGame.puzzleId   = puzzleId;
+        });
+      })
+      .catch(err => {
+        console.error('Errore avvio gioco:', err);
+        showToast('Errore nel caricamento della parola. Riprova.', 4000);
+      });
+  }
+
+  // ── Keyboard input ─────────────────────────────────────────────────────────
+
+  function initKeyboardListener() {
+    document.addEventListener('keydown', e => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      handleKey(e.key);
+    });
+  }
+
+  // ── Event listeners ────────────────────────────────────────────────────────
+
+  function initUI() {
+    // Login
+    document.getElementById('login-btn').addEventListener('click', () => {
+      Auth.signIn().catch(err => {
+        console.error('Login error:', err);
+        showToast('Errore durante il login. Riprova.', 3000);
+      });
+    });
+
+    // Logout
+    document.getElementById('logout-btn').addEventListener('click', () => {
+      Auth.signOut().then(() => {
+        window.gameState = {
+          currentGame: { date: null, puzzleId: null, targetWord: null, guesses: [], feedback: [], currentGuess: '', status: 'playing' },
+          user: { uid: null, displayName: null, email: null },
+          stats: { gamesPlayed: 0, gamesWon: 0, currentStreak: 0, maxStreak: 0, distribution: [0,0,0,0,0,0] },
+          keyboard: {}
+        };
+        showLoginScreen();
+      });
+    });
+
+    // Stats button
+    document.getElementById('stats-btn').addEventListener('click', () => {
+      renderStats();
+      openModal('stats-modal');
+    });
+
+    // History button
+    document.getElementById('history-btn').addEventListener('click', () => {
+      const uid = window.gameState.user.uid;
+      if (!uid) return;
+      Firestore.loadHistory(uid, 30).then(games => {
+        renderHistory(games);
+        openModal('history-modal');
+      });
+    });
+
+    // Share button
+    document.getElementById('share-btn').addEventListener('click', () => {
+      const gs  = window.gameState.currentGame;
+      const text = Utils.formatShare(gs.puzzleId, gs.guesses, gs.feedback, gs.status);
+      Utils.copyToClipboard(text).then(() => showToast('Copiato negli appunti!', 2000));
+    });
+
+    // Close modals
+    document.querySelectorAll('.modal-close, .modal-backdrop').forEach(el => {
+      el.addEventListener('click', () => {
+        document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+      });
+    });
+
+    // Close modal on Escape
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+      }
+    });
+  }
+
+  // ── Bootstrap ──────────────────────────────────────────────────────────────
+
+  function init() {
+    initUI();
+    initKeyboardListener();
+
+    Auth.onAuthChange(user => {
+      if (user) {
+        startGame(user);
+      } else {
+        showLoginScreen();
+      }
+    });
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+
+  return { handleKey };
+})();
