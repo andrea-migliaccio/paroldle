@@ -340,7 +340,7 @@ main {
 .keyboard-row {
   display: flex;
   justify-content: center;
-  gap: 6px;
+  gap: clamp(3px, 1.2vw, 6px);
 }
 
 .key {
@@ -377,6 +377,28 @@ main {
 .key[data-state="correct"] { background: var(--color-correct); }
 .key[data-state="present"] { background: var(--color-present); }
 .key[data-state="absent"]  { background: var(--color-absent);  }
+
+/* On narrow screens: keys shrink to fit viewport (10 keys per row + gaps) */
+@media (max-width: 484px) {
+  #keyboard { padding: 0 4px 12px; }
+  .keyboard-row { gap: clamp(2px, 1vw, 5px); }
+  /* 10 keys per row: (100vw - 8px padding - 9 gaps) / 10 */
+  .key {
+    min-width: 0;
+    max-width: none;
+    width: clamp(28px, calc((100vw - 8px - 9 * clamp(2px, 1vw, 5px)) / 10), 43px);
+    font-size: clamp(0.65rem, 2.8vw, 0.85rem);
+    height: clamp(44px, 12vw, 58px);
+  }
+  /* Wide keys (ENTER, ⌫): ~1.5× normal key */
+  .key-wide {
+    min-width: 0;
+    max-width: none;
+    width: clamp(42px, calc(1.5 * (100vw - 8px - 9 * clamp(2px, 1vw, 5px)) / 10), 65px);
+    font-size: clamp(0.55rem, 2.2vw, 0.75rem);
+  }
+}
+
 
 /* ─── Modals ─────────────────────────────────────────────────────────────── */
 .modal {
@@ -591,8 +613,4 @@ main {
   main { gap: 12px; padding: 12px 0; }
 }
 
-@media (max-width: 360px) {
-  :root { --tile-size: 52px; --tile-gap: 4px; }
-  .key  { min-width: 36px; max-width: 36px; font-size: 0.75rem; }
-  .key-wide { min-width: 54px; max-width: 54px; }
-}
+
