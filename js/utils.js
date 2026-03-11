@@ -16,7 +16,7 @@ const Utils = (() => {
   // Formats the shareable result string (NYTimes style)
   function formatShare(puzzleId, guesses, feedback, status) {
     const attempts = status === 'won' ? guesses.length : 'X';
-    const header = `Wordle ${puzzleId} ${attempts}/6`;
+    const header = `UnWordle ${puzzleId} ${attempts}/6`;
     const grid = feedback.map(row =>
       row.map(state => EMOJI[state]).join('')
     ).join('\n');
